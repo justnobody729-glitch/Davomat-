@@ -1,0 +1,7 @@
+{
+  "name": "Aqlli Davomat - Smart Attendance System",
+  "description": "Maktablar uchun QR-kod asosida ishlaydigan aqlli davomat tizimi. Ota-onalarga bildirishnomalar yuborish va admin panel funksiyalari bilan.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

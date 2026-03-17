@@ -1,0 +1,88 @@
+{
+  "entities": {
+    "students": {
+      "title": "Student",
+      "description": "Student information and their unique ID for QR codes.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Full name of the student" },
+        "class": { "type": "string", "description": "Class name (e.g., 9-A)" },
+        "parentId": { "type": "string", "description": "Reference to the parent document" },
+        "studentId": { "type": "string", "description": "Unique student ID for QR code" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "class", "parentId", "studentId"]
+    },
+    "parents": {
+      "title": "Parent",
+      "description": "Parent contact information for notifications.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Parent full name" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "telegramChatId": { "type": "string", "description": "Telegram Chat ID for notifications" },
+        "studentIds": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["name", "phone"]
+    },
+    "attendance": {
+      "title": "Attendance Record",
+      "description": "Logs of student arrivals and departures.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "The unique student ID" },
+        "studentName": { "type": "string" },
+        "class": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "exitTimestamp": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["arrived", "late", "left"] },
+        "type": { "type": "string", "enum": ["entry", "exit"] }
+      },
+      "required": ["studentId", "timestamp", "status", "type"]
+    },
+    "users": {
+      "title": "User",
+      "description": "Admin users (Director, Zavuch).",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["superadmin", "director", "admin", "staff"] },
+        "isPreRegistered": { "type": "boolean" }
+      },
+      "required": ["email", "role"]
+    },
+    "classes": {
+      "title": "Class",
+      "description": "School class information including teacher and schedule.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Class name (e.g., 11-A)" },
+        "classTeacher": { "type": "string", "description": "Name of the class teacher" },
+        "weeklyHours": { "type": "number", "description": "Total weekly lesson hours" },
+        "dailySchedule": {
+          "type": "object",
+          "properties": {
+            "monday": { "type": "number" },
+            "tuesday": { "type": "number" },
+            "wednesday": { "type": "number" },
+            "thursday": { "type": "number" },
+            "friday": { "type": "number" },
+            "saturday": { "type": "number" }
+          }
+        },
+        "startTime": { "type": "string", "description": "Daily start time (e.g., 08:00)" },
+        "endTime": { "type": "string", "description": "Daily end time (e.g., 13:00)" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "classTeacher", "weeklyHours", "startTime", "endTime"]
+    }
+  },
+  "firestore": {
+    "students": { "schema": "students", "description": "Collection of students" },
+    "parents": { "schema": "parents", "description": "Collection of parents" },
+    "attendance": { "schema": "attendance", "description": "Daily attendance logs" },
+    "users": { "schema": "users", "description": "System users" },
+    "classes": { "schema": "classes", "description": "Collection of school classes" }
+  }
+}

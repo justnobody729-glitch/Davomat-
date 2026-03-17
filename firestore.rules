@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+        (getUserData().role == 'superadmin' ||
+         (request.auth.token.email == "justnobody729@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isDirector() {
+      return isAuthenticated() && getUserData().role == 'director';
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (getUserData().role in ['admin', 'director', 'superadmin'] ||
+         (request.auth.token.email == "justnobody729@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return data.email is string && isValidEmail(data.email) &&
+             data.role in ['superadmin', 'director', 'admin', 'staff'] &&
+             (!('name' in data) || data.name is string) &&
+             (!('isPreRegistered' in data) || data.isPreRegistered is bool);
+    }
+
+    function isValidStudent(data) {
+      return data.name is string && data.name.size() > 0 &&
+             data.class is string && data.class.size() > 0 &&
+             data.parentId is string &&
+             data.studentId is string;
+    }
+
+    function isValidAttendance(data) {
+      return data.studentId is string &&
+             data.status in ['arrived', 'late', 'left', 'early_exit'] &&
+             data.type in ['entry', 'exit'];
+    }
+
+    // Rules
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && (request.auth.uid == userId || (isSuperAdmin() && isValidUser(request.resource.data)));
+      allow update: if isAuthenticated() && (request.auth.uid == userId || (isSuperAdmin() && isValidUser(request.resource.data)));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /students/{studentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /teachers/{teacherId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /parents/{parentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /attendance/{recordId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    match /classes/{classId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}

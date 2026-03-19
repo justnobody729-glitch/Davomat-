@@ -271,7 +271,7 @@ export default function App() {
 
   // Data Listeners
   useEffect(() => {
-    if (!user) return;
+    if (!user || !userProfile) return;
 
     const studentsQuery = query(collection(db, 'students'), orderBy('name'));
     const unsubscribeStudents = onSnapshot(studentsQuery, (snapshot) => {
@@ -302,7 +302,7 @@ export default function App() {
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
 
     let unsubscribeUsers = () => {};
-    if (userProfile?.role === 'superadmin' || userProfile?.role === 'director') {
+    if (userProfile.role === 'superadmin' || userProfile.role === 'director') {
       const usersQuery = query(collection(db, 'users'), orderBy('name'));
       unsubscribeUsers = onSnapshot(usersQuery, (snapshot) => {
         const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AppUser));
@@ -322,6 +322,7 @@ export default function App() {
       unsubscribeStudents();
       unsubscribeTeachers();
       unsubscribeClasses();
+      unsubscribeParents();
       unsubscribeAttendance();
       unsubscribeUsers();
     };
@@ -655,12 +656,14 @@ export default function App() {
       {showAddUser && (
         <AddUserModal 
           onClose={() => setShowAddUser(false)} 
+          currentUserRole={userProfile?.role || ''}
         />
       )}
       {editingUser && (
         <EditUserModal 
           user={editingUser}
           onClose={() => setEditingUser(null)} 
+          currentUserRole={userProfile?.role || ''}
         />
       )}
       {editingTeacher && (
@@ -699,6 +702,7 @@ export default function App() {
           onConfirm={setConfirmConfig}
           onCloseConfirm={() => setConfirmConfig(null)}
           now={now}
+          currentUserRole={userProfile?.role || ''}
         />
       )}
       {confirmConfig && (
@@ -2043,7 +2047,8 @@ function ClassDetailModal({
   parents,
   onConfirm,
   onCloseConfirm,
-  now
+  now,
+  currentUserRole
 }: { 
   classId: string, 
   classes: Class[], 
@@ -2055,7 +2060,8 @@ function ClassDetailModal({
   parents: Parent[],
   onConfirm: (config: { title: string; message: string; onConfirm: () => void }) => void,
   onCloseConfirm: () => void,
-  now: Date
+  now: Date,
+  currentUserRole: string
 }) {
   const [newStudentName, setNewStudentName] = useState('');
   const [newStudentPhone, setNewStudentPhone] = useState('');
@@ -2277,51 +2283,53 @@ function ClassDetailModal({
             </div>
 
             {/* Add Student Section */}
-            <div className="bg-stone-50 p-6 rounded-3xl border border-stone-100">
-              <div className="flex items-center justify-between mb-4">
-                <h5 className="text-sm font-bold text-stone-700 uppercase tracking-wider">Yangi o'quvchi qo'shish</h5>
-                {generatedQR && (
-                  <button 
-                    onClick={() => {
-                      setGeneratedQR(null);
-                      setNewStudentName('');
-                      setNewStudentPhone('');
-                    }}
-                    className="text-emerald-600 text-xs font-bold hover:underline"
-                  >
-                    Tozalash
-                  </button>
-                )}
-              </div>
+            {(currentUserRole === 'superadmin' || currentUserRole === 'admin' || currentUserRole === 'director') && (
+              <div className="bg-stone-50 p-6 rounded-3xl border border-stone-100">
+                <div className="flex items-center justify-between mb-4">
+                  <h5 className="text-sm font-bold text-stone-700 uppercase tracking-wider">Yangi o'quvchi qo'shish</h5>
+                  {generatedQR && (
+                    <button 
+                      onClick={() => {
+                        setGeneratedQR(null);
+                        setNewStudentName('');
+                        setNewStudentPhone('');
+                      }}
+                      className="text-emerald-600 text-xs font-bold hover:underline"
+                    >
+                      Tozalash
+                    </button>
+                  )}
+                </div>
 
-              {!generatedQR ? (
-                <button 
-                  onClick={() => setShowAddModal(true)}
-                  className="w-full bg-white border-2 border-dashed border-stone-200 p-8 rounded-2xl text-stone-400 hover:border-emerald-500 hover:text-emerald-600 transition-all flex flex-col items-center gap-2 group"
-                >
-                  <div className="w-12 h-12 bg-stone-100 rounded-full flex items-center justify-center group-hover:bg-emerald-50 transition-colors">
-                    <Plus className="w-6 h-6" />
-                  </div>
-                  <span className="font-bold">O'quvchi qo'shish uchun bosing</span>
-                </button>
-              ) : (
-                <div className="flex flex-col sm:flex-row items-center gap-6 animate-in fade-in slide-in-from-top-2">
-                  <img src={generatedQR} alt="QR" className="w-32 h-32 rounded-xl shadow-sm border border-stone-200" />
-                  <div className="flex-1 text-center sm:text-left">
-                    <p className="font-bold text-stone-900 text-lg">{newStudentName}</p>
-                    <p className="text-stone-500 text-sm mb-4">QR-kod tayyor. O'quvchi birinchi marta skaner qilganida avtomatik ro'yxatga olinadi.</p>
-                    <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
-                      <button 
-                        onClick={downloadQR}
-                        className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-emerald-700 transition-all flex items-center gap-2"
-                      >
-                        <Download className="w-4 h-4" /> Yuklab olish
-                      </button>
+                {!generatedQR ? (
+                  <button 
+                    onClick={() => setShowAddModal(true)}
+                    className="w-full bg-white border-2 border-dashed border-stone-200 p-8 rounded-2xl text-stone-400 hover:border-emerald-500 hover:text-emerald-600 transition-all flex flex-col items-center gap-2 group"
+                  >
+                    <div className="w-12 h-12 bg-stone-100 rounded-full flex items-center justify-center group-hover:bg-emerald-50 transition-colors">
+                      <Plus className="w-6 h-6" />
+                    </div>
+                    <span className="font-bold">O'quvchi qo'shish uchun bosing</span>
+                  </button>
+                ) : (
+                  <div className="flex flex-col sm:flex-row items-center gap-6 animate-in fade-in slide-in-from-top-2">
+                    <img src={generatedQR} alt="QR" className="w-32 h-32 rounded-xl shadow-sm border border-stone-200" />
+                    <div className="flex-1 text-center sm:text-left">
+                      <p className="font-bold text-stone-900 text-lg">{newStudentName}</p>
+                      <p className="text-stone-500 text-sm mb-4">QR-kod tayyor. O'quvchi birinchi marta skaner qilganida avtomatik ro'yxatga olinadi.</p>
+                      <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
+                        <button 
+                          onClick={downloadQR}
+                          className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-emerald-700 transition-all flex items-center gap-2"
+                        >
+                          <Download className="w-4 h-4" /> Yuklab olish
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
 
             {/* Small Alert / Modal for Adding Student */}
             {showAddModal && (
@@ -2622,7 +2630,7 @@ function UsersView({
           <h2 className="text-3xl font-bold text-stone-900 tracking-tight">Foydalanuvchilar</h2>
           <p className="text-stone-500 mt-1">Tizim adminstratorlari va direktorlarini boshqarish</p>
         </div>
-        {currentUserRole === 'superadmin' && (
+        {(currentUserRole === 'superadmin' || currentUserRole === 'director') && (
           <button 
             onClick={onAddUser}
             className="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-100"
@@ -2670,19 +2678,19 @@ function UsersView({
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
-                      {currentUserRole === 'superadmin' && u.email !== currentUserEmail && (
+                      {(currentUserRole === 'superadmin' || (currentUserRole === 'director' && (u.role === 'admin' || u.role === 'staff'))) && u.email !== currentUserEmail && (
                         <select 
                           value={u.role}
                           onChange={(e) => onUpdateRole(u.id, e.target.value as any)}
                           className="text-sm border border-stone-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-emerald-500 outline-none"
                         >
-                          <option value="superadmin">Super Admin</option>
-                          <option value="director">Direktor</option>
+                          {currentUserRole === 'superadmin' && <option value="superadmin">Super Admin</option>}
+                          {currentUserRole === 'superadmin' && <option value="director">Direktor</option>}
                           <option value="admin">Admin</option>
                           <option value="staff">Xodim</option>
                         </select>
                       )}
-                      {currentUserRole === 'superadmin' && u.email !== currentUserEmail && (
+                      {(currentUserRole === 'superadmin' || (currentUserRole === 'director' && (u.role === 'admin' || u.role === 'staff'))) && u.email !== currentUserEmail && (
                         <button 
                           onClick={() => onEditUser(u)}
                           className="p-2 text-stone-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
@@ -2690,7 +2698,7 @@ function UsersView({
                           <Edit2 className="w-4 h-4" />
                         </button>
                       )}
-                      {currentUserRole === 'superadmin' && u.email !== currentUserEmail && (
+                      {(currentUserRole === 'superadmin' || (currentUserRole === 'director' && (u.role === 'admin' || u.role === 'staff'))) && u.email !== currentUserEmail && (
                         <button 
                           onClick={() => onDeleteUser(u.id)}
                           className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
@@ -2748,7 +2756,7 @@ function ConfirmModal({
   );
 }
 
-function EditUserModal({ user, onClose }: { user: AppUser, onClose: () => void }) {
+function EditUserModal({ user, onClose, currentUserRole }: { user: AppUser, onClose: () => void, currentUserRole: string }) {
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
   const [role, setRole] = useState(user.role);
@@ -2805,7 +2813,8 @@ function EditUserModal({ user, onClose }: { user: AppUser, onClose: () => void }
               onChange={(e) => setRole(e.target.value as any)}
               className="w-full border border-stone-200 px-4 py-3 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
             >
-              <option value="director">Direktor</option>
+              {currentUserRole === 'superadmin' && <option value="superadmin">Super Admin</option>}
+              {currentUserRole === 'superadmin' && <option value="director">Direktor</option>}
               <option value="admin">Admin</option>
               <option value="staff">Xodim</option>
             </select>
@@ -2832,12 +2841,19 @@ function EditUserModal({ user, onClose }: { user: AppUser, onClose: () => void }
   );
 }
 
-function AddUserModal({ onClose }: { onClose: () => void }) {
+function AddUserModal({ onClose, currentUserRole }: { onClose: () => void, currentUserRole: string }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'director' | 'admin' | 'staff'>('admin');
+  const [role, setRole] = useState<'superadmin' | 'director' | 'admin' | 'staff'>('admin');
   const [submitting, setSubmitting] = useState(false);
+
+  // Set initial role based on what's allowed
+  useEffect(() => {
+    if (currentUserRole === 'director') {
+      setRole('admin');
+    }
+  }, [currentUserRole]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2929,7 +2945,8 @@ function AddUserModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setRole(e.target.value as any)}
               className="w-full border border-stone-200 px-4 py-3 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
             >
-              <option value="director">Direktor</option>
+              {currentUserRole === 'superadmin' && <option value="superadmin">Super Admin</option>}
+              {currentUserRole === 'superadmin' && <option value="director">Direktor</option>}
               <option value="admin">Admin</option>
               <option value="staff">Xodim</option>
             </select>

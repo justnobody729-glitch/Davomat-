@@ -59,7 +59,11 @@ service cloud.firestore {
 
     // Rules
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow read: if isAuthenticated() && (
+        request.auth.uid == userId || 
+        isAdmin() || 
+        (request.query.limit <= 1 && request.query.filters.size() == 1 && request.query.filters[0].field == 'email' && request.query.filters[0].value == request.auth.token.email)
+      );
       allow create: if isAuthenticated() && (request.auth.uid == userId || (isSuperAdmin() && isValidUser(request.resource.data)));
       allow update: if isAuthenticated() && (request.auth.uid == userId || (isSuperAdmin() && isValidUser(request.resource.data)));
       allow delete: if isSuperAdmin();

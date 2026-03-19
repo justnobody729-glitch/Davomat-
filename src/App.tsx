@@ -190,7 +190,7 @@ export default function App() {
           } else {
             // Create default profile
             // First user or specific email gets superadmin
-            const isFirstSuperAdmin = u.email === 'justnobody729@gmail.com' || u.email === 'superadmin@maktab.uz';
+            const isFirstSuperAdmin = u.email === 'superadmin@maktab.uz';
             const isAdminUser = u.email === 'admin@maktab.uz';
             
             const newProfile: AppUser = {
@@ -392,15 +392,18 @@ export default function App() {
               </button>
             </form>
 
-            <div className="text-center mt-6">
+            <div className="text-center mt-6 p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
+              <p className="text-xs text-emerald-700 mb-2 font-medium">
+                {isSignUp ? "Hisobingiz bormi?" : "Tizimda hisobingiz yo'qmi?"}
+              </p>
               <button 
                 onClick={() => {
                   setIsSignUp(!isSignUp);
                   setLoginError(null);
                 }}
-                className="text-emerald-600 font-medium hover:underline text-sm"
+                className="text-emerald-600 font-bold hover:underline text-sm flex items-center justify-center gap-2 mx-auto"
               >
-                {isSignUp ? "Sizda hisob bormi? Kirish" : "Hisobingiz yo'qmi? Ro'yxatdan o'tish"}
+                {isSignUp ? "Kirish bo'limiga o'tish" : "Hozirroq ro'yxatdan o'tish"}
               </button>
             </div>
           </div>
@@ -459,7 +462,13 @@ export default function App() {
         <div className="mt-auto pt-6 border-t border-stone-100">
           <div className="flex items-center gap-3 mb-4 px-2">
             <div className="relative">
-              <img src={user.photoURL || ''} className="w-8 h-8 rounded-full" alt="User" />
+              {user?.photoURL ? (
+                <img src={user.photoURL} className="w-8 h-8 rounded-full" alt="User" />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xs">
+                  {user?.displayName?.charAt(0) || user?.email?.charAt(0).toUpperCase() || 'U'}
+                </div>
+              )}
               {(userProfile?.role === 'superadmin' || userProfile?.role === 'director') && (
                 <div className="absolute -top-1 -right-1 bg-emerald-600 text-white rounded-full p-0.5">
                   <ShieldCheck className="w-3 h-3" />
@@ -494,7 +503,13 @@ export default function App() {
           <span className="font-bold text-lg text-stone-900">Aqlli Davomat</span>
         </div>
         <div className="flex items-center gap-3">
-          <img src={user.photoURL || ''} className="w-8 h-8 rounded-full border border-stone-200" alt="User" />
+          {user?.photoURL ? (
+            <img src={user.photoURL} className="w-8 h-8 rounded-full border border-stone-200" alt="User" />
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xs border border-emerald-200">
+              {user?.displayName?.charAt(0) || user?.email?.charAt(0).toUpperCase() || 'U'}
+            </div>
+          )}
           <button 
             onClick={handleLogout}
             className="p-2 text-stone-400 hover:text-red-600 transition-colors"

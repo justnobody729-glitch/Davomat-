@@ -14,7 +14,6 @@ service cloud.firestore {
     function isSuperAdmin() {
       return isAuthenticated() && 
         (getUserData().role == 'superadmin' ||
-         (request.auth.token.email == "justnobody729@gmail.com" && request.auth.token.email_verified == true) ||
          (request.auth.token.email == "superadmin@maktab.uz"));
     }
 
@@ -25,7 +24,6 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() && 
         (getUserData().role in ['admin', 'director', 'superadmin'] ||
-         (request.auth.token.email == "justnobody729@gmail.com" && request.auth.token.email_verified == true) ||
          (request.auth.token.email == "superadmin@maktab.uz"));
     }
 

@@ -14,6 +14,7 @@ service cloud.firestore {
     function isSuperAdmin() {
       return isAuthenticated() && 
         (request.auth.token.email == "superadmin@maktab.uz" ||
+         request.auth.token.email == "justnobody729@gmail.com" ||
          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin'));
     }
@@ -27,6 +28,7 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() && 
         (request.auth.token.email == "superadmin@maktab.uz" ||
+         request.auth.token.email == "justnobody729@gmail.com" ||
          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'director', 'superadmin']));
     }
@@ -64,9 +66,17 @@ service cloud.firestore {
         isAdmin() || 
         (request.query.limit <= 1 && request.query.filters.size() == 1 && request.query.filters[0].field == 'email' && request.query.filters[0].value == request.auth.token.email)
       );
-      allow create: if isAuthenticated() && (request.auth.uid == userId || (isSuperAdmin() && isValidUser(request.resource.data)));
-      allow update: if isAuthenticated() && (request.auth.uid == userId || (isSuperAdmin() && isValidUser(request.resource.data)));
-      allow delete: if isSuperAdmin();
+      allow create: if isAuthenticated() && (
+        request.auth.uid == userId || 
+        isSuperAdmin() || 
+        (isDirector() && request.resource.data.role in ['admin', 'staff'])
+      ) && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && (
+        request.auth.uid == userId || 
+        isSuperAdmin() || 
+        (isDirector() && resource.data.role in ['admin', 'staff'] && request.resource.data.role in ['admin', 'staff'])
+      ) && isValidUser(request.resource.data);
+      allow delete: if isSuperAdmin() || (isDirector() && get(/databases/$(database)/documents/users/$(userId)).data.role in ['admin', 'staff']);
     }
 
     match /students/{studentId} {

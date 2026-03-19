@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Component } from 'react';
+import React, { useState, useEffect, useRef, Component, useCallback } from 'react';
 import { 
   collection, 
   query, 
@@ -12,7 +12,8 @@ import {
   where,
   getDocs,
   doc,
-  getDoc
+  getDoc,
+  limit
 } from 'firebase/firestore';
 import { initializeApp, getApps, deleteApp } from 'firebase/app';
 import { 
@@ -25,7 +26,6 @@ import {
 } from 'firebase/auth';
 import { db, auth, config } from './firebase';
 import { QRCodeSVG } from 'qrcode.react';
-import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
 import * as XLSX from 'xlsx';
 import { 
   Users, 
@@ -38,6 +38,7 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
+  XCircle,
   Scan,
   Edit,
   Edit2,
@@ -153,6 +154,11 @@ export default function App() {
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [now, setNow] = useState(new Date());
+  const [currentDay, setCurrentDay] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
   const [confirmConfig, setConfirmConfig] = useState<{
     title: string;
     message: string;
@@ -160,35 +166,77 @@ export default function App() {
   } | null>(null);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60000);
+    const timer = setInterval(() => {
+      const currentNow = new Date();
+      setNow(currentNow);
+      
+      // Update currentDay at midnight
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (today.getTime() !== currentDay.getTime()) {
+        setCurrentDay(today);
+      }
+    }, 60000);
     return () => clearInterval(timer);
-  }, []);
+  }, [currentDay]);
 
   const handleDeleteStudent = async (id: string) => {
+    const student = students.find(s => s.id === id);
+    if (!student) return;
+
     setConfirmConfig({
       title: "O'quvchini o'chirish",
-      message: "Haqiqatan ham ushbu o'quvchini o'chirmoqchimisiz?",
+      message: `Haqiqatan ham ${student.name}ni o'chirmoqchimisiz? Barcha davomat ma'lumotlari ham o'chiriladi.`,
       onConfirm: async () => {
         try {
+          // Delete associated attendance records first
+          const q = query(
+            collection(db, 'attendance'), 
+            where('studentId', '==', student.studentId),
+            where('userType', '==', 'student')
+          );
+          const snapshot = await getDocs(q);
+          const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, 'attendance', d.id)));
+          await Promise.all(deletePromises);
+
+          // Delete student document
           await deleteDoc(doc(db, 'students', id));
+          
           setConfirmConfig(null);
         } catch (error) {
-          console.error("Error deleting student:", error);
+          console.error("Error deleting student and attendance:", error);
+          alert("O'chirishda xatolik yuz berdi");
         }
       }
     });
   };
 
   const handleDeleteTeacher = async (id: string) => {
+    const teacher = teachers.find(t => t.id === id);
+    if (!teacher) return;
+
     setConfirmConfig({
       title: "O'qituvchini o'chirish",
-      message: "Haqiqatan ham ushbu o'qituvchini o'chirmoqchimisiz?",
+      message: `Haqiqatan ham ${teacher.name}ni o'chirmoqchimisiz? Barcha davomat ma'lumotlari ham o'chiriladi.`,
       onConfirm: async () => {
         try {
+          // Delete associated attendance records first
+          const q = query(
+            collection(db, 'attendance'), 
+            where('studentId', '==', teacher.teacherId),
+            where('userType', '==', 'teacher')
+          );
+          const snapshot = await getDocs(q);
+          const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, 'attendance', d.id)));
+          await Promise.all(deletePromises);
+
+          // Delete teacher document
           await deleteDoc(doc(db, 'teachers', id));
+          
           setConfirmConfig(null);
         } catch (error) {
-          console.error("Error deleting teacher:", error);
+          console.error("Error deleting teacher and attendance:", error);
+          alert("O'chirishda xatolik yuz berdi");
         }
       }
     });
@@ -269,6 +317,58 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // General cleanup for orphaned attendance records
+  useEffect(() => {
+    if (!user || !userProfile || attendance.length === 0) return;
+    
+    const cleanupOrphaned = async () => {
+      // Only run if we have some data in teachers/students to compare against
+      // OR if we specifically find "hechkim" which we always want to remove
+      const hasHechkim = attendance.some(r => r.studentName === 'hechkim' || r.studentId === 'hechkim');
+      
+      if (!hasHechkim && (teachers.length === 0 && students.length === 0)) return;
+
+      const teacherIds = new Set(teachers.map(t => t.teacherId));
+      const studentIds = new Set(students.map(s => s.studentId));
+      
+      const orphaned = attendance.filter(record => {
+        // Always remove "hechkim"
+        if (record.studentName === 'hechkim' || record.studentId === 'hechkim') return true;
+        
+        if (record.userType === 'teacher') {
+          return teachers.length > 0 && !teacherIds.has(record.studentId);
+        } else {
+          return students.length > 0 && !studentIds.has(record.studentId);
+        }
+      });
+      
+      if (orphaned.length > 0) {
+        console.log(`Cleaning up ${orphaned.length} orphaned attendance records...`);
+        const deletePromises = orphaned.map(r => deleteDoc(doc(db, 'attendance', r.id)));
+        await Promise.all(deletePromises);
+      }
+    };
+    
+    cleanupOrphaned().catch(console.error);
+  }, [user, userProfile, teachers, students, attendance]);
+
+  // Cleanup for "hechkim" test data
+  useEffect(() => {
+    if (!user || !userProfile) return;
+    const cleanup = async () => {
+      // Cleanup teachers
+      const tq = query(collection(db, 'teachers'), where('name', '==', 'hechkim'));
+      const tSnapshot = await getDocs(tq);
+      tSnapshot.docs.forEach(d => deleteDoc(doc(db, 'teachers', d.id)));
+      
+      // Cleanup attendance
+      const aq = query(collection(db, 'attendance'), where('studentName', '==', 'hechkim'));
+      const aSnapshot = await getDocs(aq);
+      aSnapshot.docs.forEach(d => deleteDoc(doc(db, 'attendance', d.id)));
+    };
+    cleanup().catch(console.error);
+  }, [user, userProfile]);
+
   // Data Listeners
   useEffect(() => {
     if (!user || !userProfile) return;
@@ -293,9 +393,14 @@ export default function App() {
       setParents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Parent)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'parents'));
 
+    const thirtyDaysAgo = new Date(currentDay);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
     const attendanceQuery = query(
       collection(db, 'attendance'), 
-      orderBy('timestamp', 'desc')
+      where('timestamp', '>=', thirtyDaysAgo),
+      orderBy('timestamp', 'desc'),
+      limit(2000)
     );
     const unsubscribeAttendance = onSnapshot(attendanceQuery, (snapshot) => {
       setAttendance(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord)));
@@ -326,7 +431,7 @@ export default function App() {
       unsubscribeAttendance();
       unsubscribeUsers();
     };
-  }, [user, userProfile]);
+  }, [user, userProfile, currentDay]);
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -572,7 +677,13 @@ export default function App() {
           />
         )}
         {activeTab === 'scanner' && (
-          <ScannerView students={students} teachers={teachers} classes={classes} parents={parents} />
+          <ScannerView 
+            students={students} 
+            teachers={teachers} 
+            classes={classes} 
+            parents={parents} 
+            onConfirm={setConfirmConfig}
+          />
         )}
         {activeTab === 'teachers' && (
           <TeachersView 
@@ -814,16 +925,14 @@ function DashboardView({
 }) {
   const [view, setView] = useState<'teachers' | 'classes'>('classes');
   const [selectedDate, setSelectedDate] = useState(format(now, 'yyyy-MM-dd'));
+  const [isAutoDate, setIsAutoDate] = useState(true);
   
   // Update selectedDate if it's today and the day changed
   useEffect(() => {
-    const todayStr = format(now, 'yyyy-MM-dd');
-    if (selectedDate !== todayStr && new Date(selectedDate).setHours(0,0,0,0) < now.setHours(0,0,0,0)) {
-      // Only auto-update if it was set to a previous day and we want to follow 'today'
-      // Actually, better to just let the user decide or have a 'Today' button.
-      // For now, let's just keep it as is but provide the picker.
+    if (isAutoDate) {
+      setSelectedDate(format(now, 'yyyy-MM-dd'));
     }
-  }, [now]);
+  }, [now, isAutoDate]);
 
   const startOfDay = new Date(selectedDate).setHours(0,0,0,0);
   const endOfDay = new Date(selectedDate).setHours(23,59,59,999);
@@ -852,7 +961,10 @@ function DashboardView({
               <input 
                 type="date" 
                 value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                onChange={(e) => {
+                  setSelectedDate(e.target.value);
+                  setIsAutoDate(e.target.value === format(now, 'yyyy-MM-dd'));
+                }}
                 className="opacity-0 absolute inset-0 cursor-pointer w-full h-full"
               />
               <Calendar className="w-4 h-4 text-emerald-600 cursor-pointer" />
@@ -1086,78 +1198,36 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
   }
 }
 
-function ScannerView({ students, teachers, classes, parents }: { students: Student[], teachers: Teacher[], classes: Class[], parents: Parent[] }) {
+function ScannerView({ 
+  students, 
+  teachers, 
+  classes, 
+  parents,
+  onConfirm
+}: { 
+  students: Student[], 
+  teachers: Teacher[], 
+  classes: Class[], 
+  parents: Parent[],
+  onConfirm: (config: any) => void
+}) {
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [scanMessage, setScanMessage] = useState<string>('');
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
-  const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
+  const [isScannerEnabled, setIsScannerEnabled] = useState(false);
+  const scannerBufferRef = useRef<string>("");
+  const lastKeyTimeRef = useRef<number>(0);
   const lastScannedRef = useRef<string | null>(null);
-
-  const sendTelegramNotification = async (chatId: string, message: string) => {
-    try {
-      await fetch('/api/notifications/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, message })
-      });
-    } catch (error) {
-      console.error("Notification error:", error);
-    }
-  };
-
-  const startScanner = async () => {
-    setCameraError(null);
-    try {
-      // Stop any existing scanner first
-      await stopScanner();
-
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("reader");
-      }
-
-      const config = { 
-        fps: 10, 
-        qrbox: { width: 250, height: 250 },
-        aspectRatio: 1.0
-      };
-      
-      await html5QrCodeRef.current.start(
-        { facingMode: "environment" }, 
-        config, 
-        (decodedText) => onScanSuccess(decodedText),
-        () => {} // ignore scan failures
-      );
-      setIsScanning(true);
-    } catch (err) {
-      console.error("Scanner start error:", err);
-      setCameraError("Kameraga ulanib bo'lmadi. Iltimos, ruxsat berilganini tekshiring yoki ilovani yangi oynada oching.");
-      setIsScanning(false);
-    }
-  };
-
-  const stopScanner = async () => {
-    if (html5QrCodeRef.current) {
-      try {
-        if (html5QrCodeRef.current.isScanning) {
-          await html5QrCodeRef.current.stop();
-        }
-        html5QrCodeRef.current.clear();
-        setIsScanning(false);
-      } catch (err) {
-        console.error("Scanner stop error:", err);
-      }
-    }
-  };
+  const setConfirmConfig = onConfirm;
+  const statusRef = useRef(status);
 
   useEffect(() => {
-    return () => {
-      stopScanner();
-    };
-  }, []);
+    statusRef.current = status;
+  }, [status]);
 
-  async function onScanSuccess(decodedText: string) {
-    if (status !== 'idle') return;
+  const onScanSuccess = useCallback(async (decodedText: string) => {
+    if (statusRef.current !== 'idle') return;
     if (lastScannedRef.current === decodedText) return;
     
     lastScannedRef.current = decodedText;
@@ -1343,106 +1413,140 @@ function ScannerView({ students, teachers, classes, parents }: { students: Stude
         setStatus('idle');
       }, 3000);
     }
-  }
+  }, [students, teachers, classes, parents]);
+
+  const sendTelegramNotification = async (chatId: string, message: string) => {
+    try {
+      await fetch('/api/notifications/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId, message })
+      });
+    } catch (error) {
+      console.error("Notification error:", error);
+    }
+  };
+
+  const startScanner = async () => {
+    setConfirmConfig({
+      title: "Skaner qurilmasini faollashtirish",
+      message: "Tashqi skaner qurilmasidan foydalanishga ruxsat berasizmi? Bu rejimda kamera ishlatilmaydi va skaner klaviatura kabi ishlaydi.",
+      onConfirm: async () => {
+        setIsScannerEnabled(true);
+        setIsScanning(true);
+        setConfirmConfig(null);
+      }
+    });
+  };
+
+  const stopScanner = async () => {
+    setIsScannerEnabled(false);
+    setIsScanning(false);
+    scannerBufferRef.current = "";
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isScannerEnabled) return;
+
+      const currentTime = Date.now();
+      
+      // If the gap between keys is too large, it's likely manual typing, reset buffer
+      // Physical scanners are very fast (usually < 50ms between keys)
+      if (currentTime - lastKeyTimeRef.current > 100) {
+        scannerBufferRef.current = "";
+      }
+      
+      lastKeyTimeRef.current = currentTime;
+
+      if (e.key === 'Enter') {
+        if (scannerBufferRef.current.length > 0) {
+          onScanSuccess(scannerBufferRef.current);
+          scannerBufferRef.current = "";
+        }
+      } else if (e.key.length === 1) {
+        scannerBufferRef.current += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isScannerEnabled, onScanSuccess]);
 
   return (
     <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-500">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl md:text-3xl font-bold text-stone-900">QR Skaner</h2>
-        <p className="text-sm text-stone-500">O'quvchi QR-kodini kameraga qarating</p>
+        <h2 className="text-2xl md:text-3xl font-bold text-stone-900">Skaner Qurilmasi</h2>
+        <p className="text-stone-500">Tashqi QR/Shtrix-kod skanerini ulang va faollashtiring</p>
       </div>
 
-      <div className="relative aspect-square w-full max-w-[320px] md:max-w-md mx-auto">
-        <div 
-          id="reader" 
-          className="w-full h-full overflow-hidden rounded-3xl border-4 border-white shadow-2xl bg-black"
-        ></div>
-        
-        {!isScanning && (
-          <div className="absolute inset-0 flex items-center justify-center bg-stone-900 rounded-3xl z-10 p-6">
-            {!cameraError ? (
-              <button 
-                onClick={startScanner}
-                className="w-full bg-emerald-600 text-white px-6 py-4 rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-3 shadow-xl"
-              >
-                <Scan className="w-6 h-6" />
-                Kamerani yoqish
-              </button>
-            ) : (
-              <div className="text-center text-white">
-                <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
-                <p className="text-sm font-medium mb-4">{cameraError}</p>
-                <div className="flex flex-col gap-2">
-                  <button 
-                    onClick={startScanner}
-                    className="bg-white text-stone-900 px-5 py-2.5 rounded-xl font-bold hover:bg-stone-100 transition-all text-sm"
-                  >
-                    Qayta urinish
-                  </button>
-                  <a 
-                    href={window.location.href} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-emerald-400 text-xs font-bold hover:underline"
-                  >
-                    Yangi oynada ochish
-                  </a>
+      <div className="bg-white p-8 md:p-12 rounded-[2.5rem] shadow-2xl shadow-stone-200/50 border border-stone-100 relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-2 bg-stone-50">
+          <div className={`h-full transition-all duration-500 ${
+            status === 'success' ? 'bg-emerald-500 w-full' : 
+            status === 'error' ? 'bg-red-500 w-full' : 
+            isScanning ? 'bg-emerald-500 animate-pulse w-full' : 'w-0'
+          }`} />
+        </div>
+
+        <div className="flex flex-col items-center justify-center space-y-8">
+          <div className={`w-48 h-48 md:w-64 md:h-64 rounded-[2rem] border-4 flex items-center justify-center transition-all duration-500 ${
+            status === 'success' ? 'border-emerald-500 bg-emerald-50' :
+            status === 'error' ? 'border-red-500 bg-red-50' :
+            isScanning ? 'border-emerald-500 bg-stone-50' : 'border-stone-200 bg-stone-50'
+          }`}>
+            {status === 'success' ? (
+              <CheckCircle2 className="w-24 h-24 md:w-32 md:h-32 text-emerald-500 animate-in zoom-in duration-300" />
+            ) : status === 'error' ? (
+              <XCircle className="w-24 h-24 md:w-32 md:h-32 text-red-500 animate-in zoom-in duration-300" />
+            ) : isScanning ? (
+              <div className="relative flex flex-col items-center gap-4">
+                <div className="w-24 h-24 md:w-32 md:h-32 text-emerald-500 animate-pulse">
+                  <QrCode className="w-full h-full" />
                 </div>
+                <span className="text-emerald-600 font-bold animate-pulse text-sm">Skaner tayyor...</span>
               </div>
+            ) : (
+              <QrCode className="w-24 h-24 md:w-32 md:h-32 text-stone-300" />
             )}
           </div>
-        )}
-        
-        {status === 'success' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-emerald-600/90 rounded-3xl animate-in fade-in duration-300 z-20">
-            <div className="text-center text-white">
-              <CheckCircle2 className="w-20 h-20 mx-auto mb-4" />
-              <p className="text-2xl font-bold">{scanMessage}</p>
-              <p className="opacity-80">Muvaffaqiyatli qayd etildi</p>
-            </div>
-          </div>
-        )}
-        
-        {status === 'error' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-red-600/90 rounded-3xl animate-in fade-in duration-300 z-20">
-            <div className="text-center text-white">
-              <AlertCircle className="w-20 h-20 mx-auto mb-4" />
-              <p className="text-2xl font-bold">Xatolik</p>
-              <p className="opacity-80">{scanMessage || "Qayta urinib ko'ring"}</p>
-            </div>
-          </div>
-        )}
-      </div>
 
-      <div className="bg-white p-6 rounded-3xl border border-stone-200 shadow-sm">
-        <h4 className="font-bold text-stone-900 mb-2">Skaner ishlamay qolsa:</h4>
-        <div className="space-y-4">
-          <p className="text-stone-500 text-sm">
-            1. Kamerani o'chirib, qayta yoqing.<br />
-            2. Sahifani yangilang.<br />
-            3. Ilovani yangi oynada oching (brauzer ruxsatlari uchun).
-          </p>
-          <div className="flex flex-wrap gap-3 justify-center">
-            <button 
-              onClick={stopScanner}
-              className="px-4 py-2 bg-stone-100 text-stone-600 rounded-xl font-bold hover:bg-stone-200 transition-all text-sm"
-            >
-              Skanerni to'xtatish
-            </button>
-            <button 
-              onClick={startScanner}
-              className="px-4 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-bold hover:bg-emerald-200 transition-all text-sm"
-            >
-              Qayta ishga tushirish
-            </button>
-            <a 
-              href={window.location.href} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-blue-50 text-blue-600 rounded-xl font-bold hover:bg-blue-100 transition-all text-sm flex items-center gap-2"
-            >
-              Yangi oynada ochish <Scan className="w-4 h-4" />
-            </a>
+          <div className="text-center space-y-4 w-full">
+            {scanMessage && (
+              <div className={`p-4 rounded-2xl font-bold text-lg md:text-xl animate-in slide-in-from-top-2 duration-300 ${
+                status === 'success' ? 'bg-emerald-100 text-emerald-700' :
+                status === 'error' ? 'bg-red-100 text-red-700' :
+                'bg-stone-100 text-stone-700'
+              }`}>
+                {scanMessage}
+              </div>
+            )}
+
+            {!isScanning ? (
+              <button
+                onClick={startScanner}
+                className="w-full py-5 bg-emerald-600 text-white rounded-2xl font-bold text-lg hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-100 flex items-center justify-center gap-3"
+              >
+                <QrCode className="w-6 h-6" />
+                Skanerni faollashtirish
+              </button>
+            ) : (
+              <button
+                onClick={stopScanner}
+                className="w-full py-5 bg-stone-900 text-white rounded-2xl font-bold text-lg hover:bg-stone-800 transition-all shadow-xl shadow-stone-200 flex items-center justify-center gap-3"
+              >
+                <XCircle className="w-6 h-6" />
+                Skanerni to'xtatish
+              </button>
+            )}
+            
+            <p className="text-sm text-stone-400">
+              {isScanning 
+                ? "Skaner qurilmasi orqali QR kodni o'qing" 
+                : "Skanerlashni boshlash uchun tugmani bosing"}
+            </p>
           </div>
         </div>
       </div>
@@ -1680,6 +1784,24 @@ function EditTeacherModal({ teacher, onClose }: { teacher: Teacher, onClose: () 
         name,
         subject
       });
+
+      // Remove from today's attendance
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      const q = query(
+        collection(db, 'attendance'),
+        where('studentId', '==', teacher.teacherId),
+        where('timestamp', '>=', today),
+        where('timestamp', '<', tomorrow)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const deletePromises = querySnapshot.docs.map(d => deleteDoc(doc(db, 'attendance', d.id)));
+      await Promise.all(deletePromises);
+
       onClose();
     } catch (error) {
       console.error("Error updating teacher:", error);
@@ -2515,7 +2637,11 @@ function ClassDetailModal({
 }
 
 function TeacherLogsView({ attendance }: { attendance: AttendanceRecord[] }) {
-  const teacherAttendance = attendance.filter(r => r.userType === 'teacher');
+  const teacherAttendance = attendance.filter(r => 
+    r.userType === 'teacher' && 
+    r.studentName !== 'hechkim' && 
+    r.studentId !== 'hechkim'
+  );
   
   const exportTeacherLogs = () => {
     const data = teacherAttendance.map(record => ({
@@ -2847,6 +2973,7 @@ function AddUserModal({ onClose, currentUserRole }: { onClose: () => void, curre
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'superadmin' | 'director' | 'admin' | 'staff'>('admin');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Set initial role based on what's allowed
   useEffect(() => {
@@ -2857,22 +2984,48 @@ function AddUserModal({ onClose, currentUserRole }: { onClose: () => void, curre
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     if (password.length < 6) {
-      alert("Parol kamida 6 ta belgidan iborat bo'lishi kerak");
+      setError("Parol kamida 6 ta belgidan iborat bo'lishi kerak");
       return;
     }
     setSubmitting(true);
     try {
       const finalEmail = email.includes('@') ? email.toLowerCase() : `${email.toLowerCase()}@maktab.uz`;
       
+      // Check if user already exists in Firestore
+      const q = query(collection(db, 'users'), where('email', '==', finalEmail));
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        setError("Ushbu login allaqachon foydalanilmoqda.");
+        setSubmitting(false);
+        return;
+      }
+
       // Create user in Firebase Auth using a secondary app instance
       // This prevents the current superadmin from being logged out
       const appName = `Secondary-${Date.now()}`;
       const secondaryApp = initializeApp(config, appName);
       const secondaryAuth = getAuth(secondaryApp);
       
-      const userCredential = await createUserWithEmailAndPassword(secondaryAuth, finalEmail, password);
-      const newUser = userCredential.user;
+      let newUser;
+      try {
+        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, finalEmail, password);
+        newUser = userCredential.user;
+      } catch (authErr: any) {
+        if (authErr.code === 'auth/email-already-in-use') {
+          // Try to sign in to get the UID (in case Firestore profile was deleted but Auth user remains)
+          try {
+            const userCredential = await signInWithEmailAndPassword(secondaryAuth, finalEmail, password);
+            newUser = userCredential.user;
+          } catch (signInErr: any) {
+            // If sign-in fails, it means the password is wrong or something else
+            throw authErr; // Re-throw the original email-already-in-use error
+          }
+        } else {
+          throw authErr;
+        }
+      }
       
       // Sign out and delete secondary app
       await signOut(secondaryAuth);
@@ -2888,12 +3041,16 @@ function AddUserModal({ onClose, currentUserRole }: { onClose: () => void, curre
       });
       
       onClose();
-    } catch (error: any) {
-      console.error("Error adding user:", error);
-      if (error.code === 'auth/email-already-in-use') {
-        alert("Ushbu login allaqachon mavjud");
+    } catch (err: any) {
+      console.error("Error adding user:", err);
+      if (err.code === 'auth/email-already-in-use') {
+        setError("Ushbu login allaqachon mavjud. Iltimos, boshqa login tanlang.");
+      } else if (err.code === 'auth/invalid-email') {
+        setError("Login noto'g'ri formatda.");
+      } else if (err.code === 'auth/weak-password') {
+        setError("Parol juda kuchsiz.");
       } else {
-        alert("Xatolik yuz berdi: " + (error.message || "Noma'lum xato"));
+        setError("Xatolik yuz berdi: " + (err.message || "Noma'lum xato"));
       }
     } finally {
       setSubmitting(false);
@@ -2904,6 +3061,14 @@ function AddUserModal({ onClose, currentUserRole }: { onClose: () => void, curre
     <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex md:items-center items-start justify-center p-4 z-50 animate-in fade-in duration-300 overflow-y-auto">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8 my-auto animate-in zoom-in-95 duration-300">
         <h3 className="text-2xl font-bold text-stone-900 mb-6">Yangi foydalanuvchi qo'shish</h3>
+        
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-2xl text-sm font-medium mb-6 flex gap-3 items-center animate-in fade-in slide-in-from-top-2">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <p>{error}</p>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-bold text-stone-700 mb-1">F.I.SH</label>

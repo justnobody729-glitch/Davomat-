@@ -15,10 +15,10 @@ import {
   getDoc
 } from 'firebase/firestore';
 import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
   onAuthStateChanged, 
   signOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   User as FirebaseUser 
 } from 'firebase/auth';
 import { db, auth } from './firebase';
@@ -45,12 +45,13 @@ import {
   UserCog,
   Calendar,
   Send,
-  ExternalLink
+  ExternalLink,
+  Lock,
+  Mail,
+  ChevronLeft
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Student, AttendanceRecord, Parent, Teacher, Class, User as AppUser } from './types';
-
-const provider = new GoogleAuthProvider();
 
 const calculateEndTime = (startTime: string, lessons: number) => {
   if (!startTime || !lessons || lessons <= 0) return '--:--';
@@ -78,6 +79,11 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<AppUser | null>(null);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'scanner' | 'teachers' | 'teacher_logs' | 'users'>('dashboard');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [classes, setClasses] = useState<Class[]>([]);
@@ -184,12 +190,14 @@ export default function App() {
           } else {
             // Create default profile
             // First user or specific email gets superadmin
-            const isFirstSuperAdmin = u.email === 'justnobody729@gmail.com';
+            const isFirstSuperAdmin = u.email === 'justnobody729@gmail.com' || u.email === 'superadmin@maktab.uz';
+            const isAdminUser = u.email === 'admin@maktab.uz';
+            
             const newProfile: AppUser = {
               id: u.uid,
-              name: u.displayName || 'Noma\'lum',
+              name: u.displayName || (u.email === 'superadmin@maktab.uz' ? 'Super Admin' : (u.email === 'admin@maktab.uz' ? 'Admin' : 'Xodim')),
               email: u.email || '',
-              role: isFirstSuperAdmin ? 'superadmin' : 'admin'
+              role: isFirstSuperAdmin ? 'superadmin' : (isAdminUser ? 'admin' : 'staff')
             };
             await setDoc(doc(db, 'users', u.uid), newProfile);
             setUserProfile(newProfile);
@@ -252,11 +260,45 @@ export default function App() {
     };
   }, [user, userProfile]);
 
-  const handleLogin = async () => {
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLoggingIn || !email || !password) return;
+    setLoginError(null);
+    setIsLoggingIn(true);
+    
+    // If user didn't provide a domain, append a default one for Firebase Auth
+    const loginEmail = email.includes('@') ? email : `${email}@maktab.uz`;
+    
     try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login failed:", error);
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, loginEmail, password);
+      } else {
+        await signInWithEmailAndPassword(auth, loginEmail, password);
+      }
+    } catch (error: any) {
+      console.error("Auth operation failed:", error);
+      let message = "Xatolik yuz berdi.";
+      
+      if (isSignUp) {
+        if (error.code === 'auth/email-already-in-use') {
+          message = "Bu login allaqachon band. Iltimos, 'Kirish' bo'limiga o'tib kiring.";
+        } else if (error.code === 'auth/weak-password') {
+          message = "Parol juda oddiy. Kamida 6 ta belgi bo'lishi kerak.";
+        } else {
+          message = "Ro'yxatdan o'tishda xatolik: " + error.message;
+        }
+      } else {
+        if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+          message = `Login yoki parol noto'g'ri. Agar hisobingiz bo'lmasa, pastdagi 'Ro'yxatdan o'tish' tugmasini bosing.`;
+        } else if (error.code === 'auth/invalid-email') {
+          message = "Login noto'g'ri formatda.";
+        } else if (error.code === 'auth/operation-not-allowed') {
+          message = "Firebase konsolida 'Email/Password' provayderi yoqilmagan.";
+        }
+      }
+      setLoginError(message);
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -295,13 +337,73 @@ export default function App() {
             <QrCode className="w-10 h-10 text-emerald-600" />
           </div>
           <h1 className="text-3xl font-bold text-stone-900 mb-2">Aqlli Davomat</h1>
-          <p className="text-stone-500 mb-8">Maktab davomat tizimiga xush kelibsiz. Tizimga kirish uchun Google hisobingizdan foydalaning.</p>
-          <button 
-            onClick={handleLogin}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-4 rounded-2xl transition-all flex items-center justify-center gap-3 shadow-lg shadow-emerald-200"
-          >
-            Google orqali kirish
-          </button>
+          <p className="text-stone-500 mb-8">Tizimga kirish uchun login va parolingizni kiriting.</p>
+          
+          <div className="space-y-6 text-left">
+            {loginError && (
+              <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-2xl text-sm font-medium animate-in fade-in slide-in-from-top-2 duration-300">
+                <div className="flex gap-3">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <p>{loginError}</p>
+                </div>
+              </div>
+            )}
+            <form onSubmit={handlePasswordLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Login</label>
+                <div className="relative">
+                  <Users className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-400" />
+                  <input 
+                    type="text" 
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="superadmin"
+                    className="w-full pl-12 pr-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Parol</label>
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-400" />
+                  <input 
+                    type="password" 
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="super123"
+                    className="w-full pl-12 pr-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                    required
+                  />
+                </div>
+              </div>
+
+              <button 
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-4 rounded-2xl transition-all flex items-center justify-center gap-3 shadow-lg shadow-emerald-200 disabled:opacity-50 disabled:cursor-not-allowed mt-2"
+              >
+                {isLoggingIn ? (
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <>{isSignUp ? "Ro'yxatdan o'tish" : "Tizimga kirish"}</>
+                )}
+              </button>
+            </form>
+
+            <div className="text-center mt-6">
+              <button 
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  setLoginError(null);
+                }}
+                className="text-emerald-600 font-medium hover:underline text-sm"
+              >
+                {isSignUp ? "Sizda hisob bormi? Kirish" : "Hisobingiz yo'qmi? Ro'yxatdan o'tish"}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -2599,9 +2701,10 @@ function EditUserModal({ user, onClose }: { user: AppUser, onClose: () => void }
     e.preventDefault();
     setSubmitting(true);
     try {
+      const finalEmail = email.includes('@') ? email.toLowerCase() : `${email.toLowerCase()}@maktab.uz`;
       await updateDoc(doc(db, 'users', user.id), {
         name,
-        email: email.toLowerCase(),
+        email: finalEmail,
         role
       });
       onClose();
@@ -2629,10 +2732,10 @@ function EditUserModal({ user, onClose }: { user: AppUser, onClose: () => void }
             />
           </div>
           <div>
-            <label className="block text-sm font-bold text-stone-700 mb-1">Email</label>
+            <label className="block text-sm font-bold text-stone-700 mb-1">Login</label>
             <input 
               required
-              type="email" 
+              type="text" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full border border-stone-200 px-4 py-3 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
@@ -2682,9 +2785,10 @@ function AddUserModal({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     setSubmitting(true);
     try {
+      const finalEmail = email.includes('@') ? email.toLowerCase() : `${email.toLowerCase()}@maktab.uz`;
       await addDoc(collection(db, 'users'), {
         name,
-        email: email.toLowerCase(),
+        email: finalEmail,
         role,
         isPreRegistered: true
       });
@@ -2714,14 +2818,14 @@ function AddUserModal({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div>
-            <label className="block text-sm font-bold text-stone-700 mb-1">Email</label>
+            <label className="block text-sm font-bold text-stone-700 mb-1">Login</label>
             <input 
               required
-              type="email" 
+              type="text" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full border border-stone-200 px-4 py-3 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
-              placeholder="example@gmail.com"
+              placeholder="Masalan: admin1"
             />
           </div>
           <div>

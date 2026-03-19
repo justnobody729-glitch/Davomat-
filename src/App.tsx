@@ -14,14 +14,16 @@ import {
   doc,
   getDoc
 } from 'firebase/firestore';
+import { initializeApp, getApps, deleteApp } from 'firebase/app';
 import { 
   onAuthStateChanged, 
   signOut,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  getAuth,
   User as FirebaseUser 
 } from 'firebase/auth';
-import { db, auth } from './firebase';
+import { db, auth, config } from './firebase';
 import { QRCodeSVG } from 'qrcode.react';
 import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
 import * as XLSX from 'xlsx';
@@ -53,6 +55,57 @@ import {
 import { format } from 'date-fns';
 import { Student, AttendanceRecord, Parent, Teacher, Class, User as AppUser } from './types';
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
 const calculateEndTime = (startTime: string, lessons: number) => {
   if (!startTime || !lessons || lessons <= 0) return '--:--';
   const [hours, minutes] = startTime.split(':').map(Number);
@@ -82,7 +135,6 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -188,19 +240,25 @@ export default function App() {
             await setDoc(doc(db, 'users', u.uid), updatedProfile);
             setUserProfile(updatedProfile);
           } else {
-            // Create default profile
-            // First user or specific email gets superadmin
+            // Create default profile ONLY for bootstrap accounts
             const isFirstSuperAdmin = u.email === 'superadmin@maktab.uz';
             const isAdminUser = u.email === 'admin@maktab.uz';
             
-            const newProfile: AppUser = {
-              id: u.uid,
-              name: u.displayName || (u.email === 'superadmin@maktab.uz' ? 'Super Admin' : (u.email === 'admin@maktab.uz' ? 'Admin' : 'Xodim')),
-              email: u.email || '',
-              role: isFirstSuperAdmin ? 'superadmin' : (isAdminUser ? 'admin' : 'staff')
-            };
-            await setDoc(doc(db, 'users', u.uid), newProfile);
-            setUserProfile(newProfile);
+            if (isFirstSuperAdmin || isAdminUser) {
+              const newProfile: AppUser = {
+                id: u.uid,
+                name: u.displayName || (isFirstSuperAdmin ? 'Super Admin' : 'Admin'),
+                email: u.email || '',
+                role: isFirstSuperAdmin ? 'superadmin' : 'admin'
+              };
+              await setDoc(doc(db, 'users', u.uid), newProfile);
+              setUserProfile(newProfile);
+            } else {
+              // Not a bootstrap account and not pre-registered/existing
+              console.warn("Unauthorized login attempt:", u.email);
+              await signOut(auth);
+              setLoginError("Sizga tizimga kirish uchun ruxsat berilmagan.");
+            }
           }
         }
       } else {
@@ -218,22 +276,22 @@ export default function App() {
     const studentsQuery = query(collection(db, 'students'), orderBy('name'));
     const unsubscribeStudents = onSnapshot(studentsQuery, (snapshot) => {
       setStudents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student)));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'students'));
 
     const teachersQuery = query(collection(db, 'teachers'), orderBy('name'));
     const unsubscribeTeachers = onSnapshot(teachersQuery, (snapshot) => {
       setTeachers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Teacher)));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'teachers'));
 
     const classesQuery = query(collection(db, 'classes'), orderBy('name'));
     const unsubscribeClasses = onSnapshot(classesQuery, (snapshot) => {
       setClasses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Class)));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'classes'));
 
     const parentsQuery = query(collection(db, 'parents'));
     const unsubscribeParents = onSnapshot(parentsQuery, (snapshot) => {
       setParents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Parent)));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'parents'));
 
     const attendanceQuery = query(
       collection(db, 'attendance'), 
@@ -241,14 +299,23 @@ export default function App() {
     );
     const unsubscribeAttendance = onSnapshot(attendanceQuery, (snapshot) => {
       setAttendance(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord)));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
 
     let unsubscribeUsers = () => {};
     if (userProfile?.role === 'superadmin' || userProfile?.role === 'director') {
       const usersQuery = query(collection(db, 'users'), orderBy('name'));
       unsubscribeUsers = onSnapshot(usersQuery, (snapshot) => {
-        setAllUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AppUser)));
-      });
+        const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AppUser));
+        setAllUsers(usersList);
+        
+        // Cleanup: Automatically remove the unwanted superadmin if current user is the main one
+        if (userProfile.email === 'superadmin@maktab.uz') {
+          const unwantedUser = usersList.find(u => u.email === 'justnobody729@gmail.com');
+          if (unwantedUser) {
+            deleteDoc(doc(db, 'users', unwantedUser.id)).catch(console.error);
+          }
+        }
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
     }
 
     return () => {
@@ -270,31 +337,17 @@ export default function App() {
     const loginEmail = email.includes('@') ? email : `${email}@maktab.uz`;
     
     try {
-      if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, loginEmail, password);
-      } else {
-        await signInWithEmailAndPassword(auth, loginEmail, password);
-      }
+      await signInWithEmailAndPassword(auth, loginEmail, password);
     } catch (error: any) {
       console.error("Auth operation failed:", error);
       let message = "Xatolik yuz berdi.";
       
-      if (isSignUp) {
-        if (error.code === 'auth/email-already-in-use') {
-          message = "Bu login allaqachon band. Iltimos, 'Kirish' bo'limiga o'tib kiring.";
-        } else if (error.code === 'auth/weak-password') {
-          message = "Parol juda oddiy. Kamida 6 ta belgi bo'lishi kerak.";
-        } else {
-          message = "Ro'yxatdan o'tishda xatolik: " + error.message;
-        }
-      } else {
-        if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-          message = `Login yoki parol noto'g'ri. Agar hisobingiz bo'lmasa, pastdagi 'Ro'yxatdan o'tish' tugmasini bosing.`;
-        } else if (error.code === 'auth/invalid-email') {
-          message = "Login noto'g'ri formatda.";
-        } else if (error.code === 'auth/operation-not-allowed') {
-          message = "Firebase konsolida 'Email/Password' provayderi yoqilmagan.";
-        }
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        message = `Login yoki parol noto'g'ri.`;
+      } else if (error.code === 'auth/invalid-email') {
+        message = "Login noto'g'ri formatda.";
+      } else if (error.code === 'auth/operation-not-allowed') {
+        message = "Firebase konsolida 'Email/Password' provayderi yoqilmagan.";
       }
       setLoginError(message);
     } finally {
@@ -357,7 +410,7 @@ export default function App() {
                     type="text" 
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="superadmin"
+                    placeholder="Loginni kiriting"
                     className="w-full pl-12 pr-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
                     required
                   />
@@ -372,7 +425,7 @@ export default function App() {
                     type="password" 
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="super123"
+                    placeholder="Parolni kiriting"
                     className="w-full pl-12 pr-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
                     required
                   />
@@ -387,25 +440,10 @@ export default function App() {
                 {isLoggingIn ? (
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 ) : (
-                  <>{isSignUp ? "Ro'yxatdan o'tish" : "Tizimga kirish"}</>
+                  "Tizimga kirish"
                 )}
               </button>
             </form>
-
-            <div className="text-center mt-6 p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-              <p className="text-xs text-emerald-700 mb-2 font-medium">
-                {isSignUp ? "Hisobingiz bormi?" : "Tizimda hisobingiz yo'qmi?"}
-              </p>
-              <button 
-                onClick={() => {
-                  setIsSignUp(!isSignUp);
-                  setLoginError(null);
-                }}
-                className="text-emerald-600 font-bold hover:underline text-sm flex items-center justify-center gap-2 mx-auto"
-              >
-                {isSignUp ? "Kirish bo'limiga o'tish" : "Hozirroq ro'yxatdan o'tish"}
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -552,6 +590,7 @@ export default function App() {
           <UsersView 
             users={allUsers} 
             currentUserRole={userProfile.role}
+            currentUserEmail={userProfile.email}
             onUpdateRole={async (userId, newRole) => {
               await updateDoc(doc(db, 'users', userId), { role: newRole });
             }}
@@ -2562,6 +2601,7 @@ function TeacherLogsView({ attendance }: { attendance: AttendanceRecord[] }) {
 function UsersView({ 
   users, 
   currentUserRole, 
+  currentUserEmail,
   onUpdateRole, 
   onDeleteUser,
   onAddUser,
@@ -2569,6 +2609,7 @@ function UsersView({
 }: { 
   users: AppUser[], 
   currentUserRole: string,
+  currentUserEmail: string,
   onUpdateRole: (userId: string, newRole: AppUser['role']) => void,
   onDeleteUser: (userId: string) => void,
   onAddUser: () => void,
@@ -2629,18 +2670,19 @@ function UsersView({
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
-                      {currentUserRole === 'superadmin' && u.role !== 'superadmin' && (
+                      {currentUserRole === 'superadmin' && u.email !== currentUserEmail && (
                         <select 
                           value={u.role}
                           onChange={(e) => onUpdateRole(u.id, e.target.value as any)}
                           className="text-sm border border-stone-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-emerald-500 outline-none"
                         >
+                          <option value="superadmin">Super Admin</option>
                           <option value="director">Direktor</option>
                           <option value="admin">Admin</option>
                           <option value="staff">Xodim</option>
                         </select>
                       )}
-                      {currentUserRole === 'superadmin' && u.role !== 'superadmin' && (
+                      {currentUserRole === 'superadmin' && u.email !== currentUserEmail && (
                         <button 
                           onClick={() => onEditUser(u)}
                           className="p-2 text-stone-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
@@ -2648,7 +2690,7 @@ function UsersView({
                           <Edit2 className="w-4 h-4" />
                         </button>
                       )}
-                      {currentUserRole === 'superadmin' && u.role !== 'superadmin' && (
+                      {currentUserRole === 'superadmin' && u.email !== currentUserEmail && (
                         <button 
                           onClick={() => onDeleteUser(u.id)}
                           className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
@@ -2793,24 +2835,50 @@ function EditUserModal({ user, onClose }: { user: AppUser, onClose: () => void }
 function AddUserModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [role, setRole] = useState<'director' | 'admin' | 'staff'>('admin');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (password.length < 6) {
+      alert("Parol kamida 6 ta belgidan iborat bo'lishi kerak");
+      return;
+    }
     setSubmitting(true);
     try {
       const finalEmail = email.includes('@') ? email.toLowerCase() : `${email.toLowerCase()}@maktab.uz`;
-      await addDoc(collection(db, 'users'), {
+      
+      // Create user in Firebase Auth using a secondary app instance
+      // This prevents the current superadmin from being logged out
+      const appName = `Secondary-${Date.now()}`;
+      const secondaryApp = initializeApp(config, appName);
+      const secondaryAuth = getAuth(secondaryApp);
+      
+      const userCredential = await createUserWithEmailAndPassword(secondaryAuth, finalEmail, password);
+      const newUser = userCredential.user;
+      
+      // Sign out and delete secondary app
+      await signOut(secondaryAuth);
+      await deleteApp(secondaryApp);
+      
+      // Add user profile to Firestore using the new UID
+      await setDoc(doc(db, 'users', newUser.uid), {
+        id: newUser.uid,
         name,
         email: finalEmail,
         role,
-        isPreRegistered: true
+        createdAt: serverTimestamp()
       });
+      
       onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error adding user:", error);
-      alert("Xatolik yuz berdi");
+      if (error.code === 'auth/email-already-in-use') {
+        alert("Ushbu login allaqachon mavjud");
+      } else {
+        alert("Xatolik yuz berdi: " + (error.message || "Noma'lum xato"));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -2841,6 +2909,17 @@ function AddUserModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setEmail(e.target.value)}
               className="w-full border border-stone-200 px-4 py-3 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               placeholder="Masalan: admin1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-stone-700 mb-1">Parol</label>
+            <input 
+              required
+              type="password" 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full border border-stone-200 px-4 py-3 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+              placeholder="Kamida 6 ta belgi"
             />
           </div>
           <div>

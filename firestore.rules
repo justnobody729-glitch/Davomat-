@@ -13,18 +13,22 @@ service cloud.firestore {
 
     function isSuperAdmin() {
       return isAuthenticated() && 
-        (getUserData().role == 'superadmin' ||
-         (request.auth.token.email == "superadmin@maktab.uz"));
+        (request.auth.token.email == "superadmin@maktab.uz" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin'));
     }
 
     function isDirector() {
-      return isAuthenticated() && getUserData().role == 'director';
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'director';
     }
 
     function isAdmin() {
       return isAuthenticated() && 
-        (getUserData().role in ['admin', 'director', 'superadmin'] ||
-         (request.auth.token.email == "superadmin@maktab.uz"));
+        (request.auth.token.email == "superadmin@maktab.uz" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'director', 'superadmin']));
     }
 
     function isValidEmail(email) {
@@ -36,7 +40,8 @@ service cloud.firestore {
       return data.email is string && isValidEmail(data.email) &&
              data.role in ['superadmin', 'director', 'admin', 'staff'] &&
              (!('name' in data) || data.name is string) &&
-             (!('isPreRegistered' in data) || data.isPreRegistered is bool);
+             (!('isPreRegistered' in data) || data.isPreRegistered is bool) &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
     }
 
     function isValidStudent(data) {

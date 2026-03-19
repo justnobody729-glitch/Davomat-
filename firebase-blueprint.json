@@ -48,7 +48,8 @@
         "name": { "type": "string" },
         "email": { "type": "string" },
         "role": { "type": "string", "enum": ["superadmin", "director", "admin", "staff"] },
-        "isPreRegistered": { "type": "boolean" }
+        "isPreRegistered": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "role"]
     },
